@@ -89,24 +89,3 @@ class CustomDataset(Dataset):
             'labels': self.label_chunks[idx].flatten()
         }
 
-
-def tokenize_and_align_labels(examples, tokenized_inputs):
-    labels = []
-
-    for i, label in enumerate(examples["tokens"]):
-        word_ids = tokenized_inputs.word_ids(batch_index=i)
-        previous_word_idx = None
-        label_ids = []
-
-        for word_idx in word_ids:
-            if word_idx is None:
-                label_ids.append(-100)
-            elif word_idx != previous_word_idx:
-                label_ids.append(label[word_idx])
-            else:
-                label_ids.append(-100)
-            previous_word_idx = word_idx
-        labels.append(label_ids)
-
-
-    return tokenized_inputs, labels
