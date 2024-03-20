@@ -131,8 +131,13 @@ def random_augmentation(token: str, type: str) -> str:
 
 def tokenizer_and_align(example: Dict, tokenizer) -> Dict:
 
-    tokens = [f' {token}' if ws else token for token, ws in zip(example['tokens'], example['trailing_whitespace'])]
-    tokens = tokenizer(tokens, add_special_tokens=False, is_split_into_words=True)
+    tokens = [f'{token} ' if ws else token for token, ws in zip(example['tokens'], example['trailing_whitespace'])]
+    tokens = tokenizer(
+        tokens,
+        padding=True,
+        pad_to_multiple_of=512,
+        is_split_into_words=True
+    )
 
     label_ids = []
     word_ids = tokens.word_ids()
@@ -140,6 +145,7 @@ def tokenizer_and_align(example: Dict, tokenizer) -> Dict:
     for word_idx in word_ids:
         if word_idx is None:
             label_ids.append(-100)
+            continue
         label_ids.append(label2id[example['labels'][word_idx]])
 
     example['aligned_tokens'] = tokens
@@ -148,7 +154,7 @@ def tokenizer_and_align(example: Dict, tokenizer) -> Dict:
     return example
 
 
-def chunk_examples(batch: Dict, max_len: int = 2048) -> Dict:
+def chunk_examples(batch: Dict, max_len: int = 512) -> Dict:
     """
     Chunk examples into batches of `max_len`.
     Each document will be converted into multiple data points of
@@ -175,20 +181,66 @@ def chunk_examples(batch: Dict, max_len: int = 2048) -> Dict:
         am = aligned_tokens['attention_mask']
         ll = labels
 
-        for s in range(0, len(ii), max_len):
-            data_row['document_id'].append(id)
-            data_row['input_ids'].append(
-                torch.tensor(ii[s:s+max_len], dtype=torch.long)
-            )
-            data_row['attention_mask'].append(
-                torch.tensor(am[s:s+max_len], dtype=torch.long)
-            )
-            data_row['labels'].append(
-                torch.tensor(ll[s:s+max_len], dtype=torch.long)
-            )
+        buffer = 64
 
-    data_row['input_ids'] = pad_sequence(data_row['input_ids'], batch_first=True)
-    data_row['attention_mask'] = pad_sequence(data_row['attention_mask'], batch_first=True)
-    data_row['labels'] = pad_sequence(data_row['labels'], batch_first=True, padding_value=-100)
+        for s in range(0, len(ii), max_len):
+            start_idx = s if s-buffer < 0 else s-buffer
+            end_idx = s+max_len
+
+            data_row['document_id'].append(id)
+            data_row['input_ids'].append(torch.tensor(ii[start_idx:end_idx]))
+            data_row['attention_mask'].append(torch.tensor(am[start_idx:end_idx]))
+            data_row['labels'].append(torch.tensor(ll[start_idx:end_idx]))
+
+    return data_row
+
+
+def tokenizer_and_align_infer(example: Dict, tokenizer) -> Dict:
+
+    tokens = [f'{token} ' if ws else token for token, ws in zip(example['tokens'], example['trailing_whitespace'])]
+    tokens = tokenizer(
+        tokens,
+        padding=True,
+        pad_to_multiple_of=512,
+        is_split_into_words=True
+    )
+
+    example['aligned_tokens'] = tokens
+
+    return example
+
+
+def chunk_examples_infer(batch: Dict, max_len: int = 512) -> Dict:
+    """
+    Chunk examples into batches of `max_len`.
+    Each document will be converted into multiple data points of
+    `max_len` each. document_token_len//max_len Will be the total
+    number of examples produced from a single document
+
+    Args:
+        batch (Dict): Batch of documents
+        max_len (int, optional): Max token len for a single example. Defaults to 512.
+
+    Returns:
+        Dataset (1:n)
+    """
+    data_row = {
+        'document_id': [],
+        'input_ids': [],
+        'attention_mask': []
+    }
+
+    for id, aligned_tokens in zip(batch['document'], batch['aligned_tokens']):
+
+        ii = aligned_tokens['input_ids']
+        am = aligned_tokens['attention_mask']
+
+        for s in range(0, len(ii), max_len):
+            start_idx = s
+            end_idx = s+max_len
+
+            data_row['document_id'].append(id)
+            data_row['input_ids'].append(torch.tensor(ii[start_idx:end_idx]))
+            data_row['attention_mask'].append(torch.tensor(am[start_idx:end_idx]))
 
     return data_row

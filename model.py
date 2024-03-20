@@ -1,8 +1,8 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForTokenClassification
+from transformers import AutoTokenizer, TFAutoModelForTokenClassification
 
-
-def get_model(model_id: str = 'microsoft/deberta-v3-base'):
+def get_model(model_id: str = 'microsoft/deberta-v3-base', num_labels: int = 15, tf: bool = False):
     """
     Given a `model_id` returns the model and the tokenizer
 
@@ -13,7 +13,12 @@ def get_model(model_id: str = 'microsoft/deberta-v3-base'):
         model, tokenizer
     """
     tokenizer = AutoTokenizer.from_pretrained(model_id, fast=True)
-    model = AutoModelForTokenClassification.from_pretrained(model_id, num_labels=15)
+
+    if tf:
+        model = TFAutoModelForTokenClassification.from_pretrained(model_id)#, num_labels=num_labels)
+        return model, tokenizer
+
+    model = AutoModelForTokenClassification.from_pretrained(model_id)#, num_labels=num_labels)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device, dtype=torch.bfloat16)
 
