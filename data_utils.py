@@ -187,6 +187,11 @@ def chunk_examples(batch: Dict, max_len: int = 512) -> Dict:
             start_idx = s if s-buffer < 0 else s-buffer
             end_idx = s+max_len
 
+            # Skip sequences where there are only
+            # padded sequences
+            if sum(am[start_idx:end_idx]) == 0:
+                continue
+
             data_row['document_id'].append(id)
             data_row['input_ids'].append(torch.tensor(ii[start_idx:end_idx]))
             data_row['attention_mask'].append(torch.tensor(am[start_idx:end_idx]))

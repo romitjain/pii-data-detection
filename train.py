@@ -10,16 +10,20 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import StepLR
 from torch.nn.utils.rnn import pad_sequence
 
-from data_utils import label2id
+from data_utils import label2id, id2label
 from datasets import load_from_disk
 from model import get_model
 
 from loguru import logger
 
+num_classes = len(list(label2id.keys()))
+
 def stack(x, p=0): return pad_sequence([torch.tensor(t) for t in x], True, padding_value=p)
 
-def load_data():
-    data = load_from_disk('./data/processed/dataset_2/')
+def load_data(path):
+    logger.info(f'Loading dataset from {path}')
+
+    data = load_from_disk(path)
     train, val = data['train'], data['val']
 
     logger.info(f'Rows in train dataset: {len(train)}, rows in val dataset: {len(val)}')
@@ -27,7 +31,11 @@ def load_data():
     return train, val
 
 def update_model(model):
-    num_classes = len(list(label2id.keys()))
+    logger.info('Updating the model')
+
+    model.config.num_labels = num_classes
+    model.config.id2label = id2label
+    model.config.label2id = label2id
 
     classifier_layer = torch.nn.Linear(
         model.classifier.in_features,
@@ -41,7 +49,7 @@ def update_model(model):
     for layer in model.parameters():
         layer.requires_grad = False
 
-    for layer in model.bert.encoder.layer[-6:].parameters():
+    for layer in model.deberta.encoder.layer[-6:].parameters():
         layer.requires_grad = True
 
     for layer in model.classifier.parameters():
@@ -104,12 +112,14 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--model_id', type=str, default='dslim/bert-large-NER')
+    parser.add_argument('--dataset', type=str, default='./data/processed/dataset_3/')
     args = parser.parse_args()
 
     num_epochs = args.epochs
     learning_rate = args.learning_rate
     batch_size = args.batch_size
     model_id = args.model_id
+    dataset = args.dataset
 
     wandb.init(
         project="pii-data-detection",
@@ -117,11 +127,12 @@ if __name__ == '__main__':
             "learning_rate": args.learning_rate,
             "architecture": args.model_id,
             "epochs": args.epochs,
-            "batch_size": args.batch_size
+            "batch_size": args.batch_size,
+            "dataset": args.dataset
         }
     )
 
-    train, val = load_data()
+    train, val = load_data(path=args.dataset)
     model, tokenizer = get_model(model_id=model_id)
 
     model = update_model(model)
@@ -132,7 +143,8 @@ if __name__ == '__main__':
 
     device = 'cuda'
     loss_fn = CrossEntropyLoss(
-        # weight=torch.tensor([1, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]).to('cuda', dtype=torch.bfloat16)
+        # weight=torch.tensor([1, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]).to('cuda', dtype=torch.bfloat16),
+        label_smoothing=0.05
     )
 
     all_losses = []
@@ -151,7 +163,12 @@ if __name__ == '__main__':
                 outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
 
                 loss = loss_fn(
-                    outputs.logits.reshape(len(labels), 15, stack(batch['labels']).shape[-1]),
+                    # Outputs logits shape is: (batch X token_len X num_labels)
+                    outputs.logits.reshape(
+                        len(labels),
+                        num_classes,
+                        stack(batch['labels']).shape[-1]
+                    ),
                     labels
                 )
 
@@ -169,11 +186,12 @@ if __name__ == '__main__':
 
         scheduler.step()
 
-    train_metrics = eval_model(model, train, 256)
-    val_metrics = eval_model(model, val, 256)
-
-    wandb.finish()
-
     save_path = f"./model/{datetime.strftime(datetime.now(), '%Y%m%d_%H%M')}"
     model.save_pretrained(os.path.join(save_path, 'model'))
     tokenizer.save_pretrained(os.path.join(save_path, 'tokenizer'))
+
+    train_metrics = eval_model(model, train, batch_size*2)
+    val_metrics = eval_model(model, val, batch_size*2)
+
+    wandb.finish()
+

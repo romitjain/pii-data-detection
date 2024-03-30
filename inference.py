@@ -5,7 +5,6 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 
 from datasets import Dataset
-from model import get_model
 from data_utils import label2id, chunk_examples_infer, tokenizer_and_align_infer
 
 from loguru import logger
