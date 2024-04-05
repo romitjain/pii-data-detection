@@ -64,6 +64,35 @@ id2label = {
     14: 'I-STREET_ADDRESS'
 }
 
+label2id_merged = {
+    'O': 0,
+    'B-NAME_STUDENT': 1,
+    'B-EMAIL': 2,
+    'B-USERNAME': 3,
+    'B-ID_NUM': 4,
+    'B-PHONE_NUM': 5,
+    'B-URL_PERSONAL': 6,
+    'B-STREET_ADDRESS': 7,
+    'I-NAME_STUDENT': 1,
+    'I-EMAIL': 2,
+    'I-USERNAME': 3,
+    'I-ID_NUM': 4,
+    'I-PHONE_NUM': 5,
+    'I-URL_PERSONAL': 6,
+    'I-STREET_ADDRESS': 7
+}
+
+id2label_merged = {
+    0: 'O',
+    1: 'B-NAME_STUDENT',
+    2: 'B-EMAIL',
+    3: 'B-USERNAME',
+    4: 'B-ID_NUM',
+    5: 'B-PHONE_NUM',
+    6: 'B-URL_PERSONAL',
+    7: 'B-STREET_ADDRESS',
+}
+
 
 def filter_data(example: Dict, p: float = 0.9) -> bool:
     """
@@ -135,7 +164,7 @@ def tokenizer_and_align(example: Dict, tokenizer) -> Dict:
     tokens = tokenizer(
         tokens,
         padding=True,
-        pad_to_multiple_of=512,
+        pad_to_multiple_of=2048,
         is_split_into_words=True
     )
 
@@ -154,7 +183,7 @@ def tokenizer_and_align(example: Dict, tokenizer) -> Dict:
     return example
 
 
-def chunk_examples(batch: Dict, max_len: int = 512) -> Dict:
+def chunk_examples(batch: Dict, max_len: int = 512, buffer: int = 64) -> Dict:
     """
     Chunk examples into batches of `max_len`.
     Each document will be converted into multiple data points of
@@ -164,6 +193,7 @@ def chunk_examples(batch: Dict, max_len: int = 512) -> Dict:
     Args:
         batch (Dict): Batch of documents
         max_len (int, optional): Max token len for a single example. Defaults to 512.
+        buffer (int, optional): Buffer to keep between two subsequent sequences of the same document
 
     Returns:
         Dataset (1:n)
@@ -180,8 +210,6 @@ def chunk_examples(batch: Dict, max_len: int = 512) -> Dict:
         ii = aligned_tokens['input_ids']
         am = aligned_tokens['attention_mask']
         ll = labels
-
-        buffer = 64
 
         for s in range(0, len(ii), max_len):
             start_idx = s if s-buffer < 0 else s-buffer

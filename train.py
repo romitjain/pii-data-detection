@@ -1,12 +1,11 @@
 import os
 import wandb
+import torch
 import pandas as pd
 from tqdm import tqdm
-import torch
 from datetime import datetime
-from torch.cuda import empty_cache
 from torch.nn import CrossEntropyLoss
-from torch.optim import Adam
+from torch.optim import AdamW
 from torch.optim.lr_scheduler import StepLR
 from torch.nn.utils.rnn import pad_sequence
 
@@ -19,6 +18,7 @@ from loguru import logger
 num_classes = len(list(label2id.keys()))
 
 def stack(x, p=0): return pad_sequence([torch.tensor(t) for t in x], True, padding_value=p)
+def stack_wo_pad(x): return torch.tensor(x)
 
 def load_data(path):
     logger.info(f'Loading dataset from {path}')
@@ -30,7 +30,7 @@ def load_data(path):
 
     return train, val
 
-def update_model(model):
+def update_model(model, unfreeze_layers=0):
     logger.info('Updating the model')
 
     model.config.num_labels = num_classes
@@ -39,18 +39,18 @@ def update_model(model):
 
     classifier_layer = torch.nn.Linear(
         model.classifier.in_features,
-        num_classes,
-        dtype=torch.bfloat16
+        num_classes
     ).to('cuda')
 
     model.classifier = classifier_layer
     model.num_labels = num_classes
 
-    for layer in model.parameters():
+    for name, layer in model.named_parameters():
         layer.requires_grad = False
 
-    for layer in model.deberta.encoder.layer[-6:].parameters():
-        layer.requires_grad = True
+    if unfreeze_layers > 0:
+        for layer in model.deberta.encoder.layer[-unfreeze_layers:].parameters():
+            layer.requires_grad = True
 
     for layer in model.classifier.parameters():
         layer.requires_grad = True
@@ -75,9 +75,9 @@ def eval_model(trained_model, eval_dataset, bs):
         for s in tqdm(range(0, len(eval_dataset), bs)):
             batch = eval_dataset[s:s+bs]
 
-            input_ids = stack(batch['input_ids']).to(device)
-            attention_mask = stack(batch['attention_mask']).to(device)
-            labels = stack(batch['labels'], -100).to(device)
+            input_ids = stack_wo_pad(batch['input_ids']).to(device)
+            attention_mask = stack_wo_pad(batch['attention_mask']).to(device)
+            labels = stack_wo_pad(batch['labels']).to(device)
 
             outputs = model(input_ids, attention_mask=attention_mask)
 
@@ -102,6 +102,16 @@ def eval_model(trained_model, eval_dataset, bs):
 
     return label_metrics
 
+def get_score(df):
+    tp = df['correct_predictions'].sum()
+    fp = df['total_predicted'].sum() - tp
+    fn = df['total_samples'].sum() - tp
+    
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
+    micro_f5_score = (1 + 5**2) * (precision * recall) / ((5**2 * precision) + recall)
+
+    return micro_f5_score
 
 if __name__ == '__main__':
     from argparse import ArgumentParser
@@ -132,19 +142,20 @@ if __name__ == '__main__':
         }
     )
 
-    train, val = load_data(path=args.dataset)
+    train, val = load_data(path=dataset)
     model, tokenizer = get_model(model_id=model_id)
 
     model = update_model(model)
 
-    optimizer = Adam(model.parameters(), lr=learning_rate)
-    scheduler = StepLR(optimizer, step_size=10, gamma=0.1, verbose=True)
+    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    scheduler = StepLR(optimizer, step_size=5, gamma=0.1, verbose=True)
     total_steps = len(train) * num_epochs
 
     device = 'cuda'
     loss_fn = CrossEntropyLoss(
         # weight=torch.tensor([1, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]).to('cuda', dtype=torch.bfloat16),
-        label_smoothing=0.05
+        # label_smoothing=0.05,
+        ignore_index=-100
     )
 
     all_losses = []
@@ -156,31 +167,24 @@ if __name__ == '__main__':
                 optimizer.zero_grad()
                 batch = train[s:s+batch_size]
 
-                input_ids = stack(batch['input_ids']).to(device)
-                attention_mask = stack(batch['attention_mask']).to(device)
-                labels = stack(batch['labels']).to(device)
+                input_ids = stack_wo_pad(batch['input_ids']).to(device)
+                attention_mask = stack_wo_pad(batch['attention_mask']).to(device)
+                labels = stack_wo_pad(batch['labels']).to(device)
 
                 outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
 
-                loss = loss_fn(
-                    # Outputs logits shape is: (batch X token_len X num_labels)
-                    outputs.logits.reshape(
-                        len(labels),
-                        num_classes,
-                        stack(batch['labels']).shape[-1]
-                    ),
-                    labels
-                )
+                logits_flat = outputs.logits.view(-1, outputs.logits.size(-1))
+                targets_flat = labels.view(-1)
 
-                all_losses.append(loss)
+                loss = loss_fn(logits_flat, targets_flat)
+
                 loss.backward()
+                all_losses.append(loss.detach())
 
                 optimizer.step()
 
                 pbar.set_postfix({'Loss': f'{loss.item():.4f}'})
                 pbar.update(1)
-
-                empty_cache()
 
                 wandb.log({"loss": loss})
 
@@ -190,8 +194,13 @@ if __name__ == '__main__':
     model.save_pretrained(os.path.join(save_path, 'model'))
     tokenizer.save_pretrained(os.path.join(save_path, 'tokenizer'))
 
-    train_metrics = eval_model(model, train, batch_size*2)
-    val_metrics = eval_model(model, val, batch_size*2)
+    train_metrics = eval_model(model, train, batch_size)
+    val_metrics = eval_model(model, val, batch_size)
+
+    train_score = get_score(train_metrics)
+    val_score = get_score(val_metrics)
+
+    wandb.log({"train_score": train_score, "val_score": val_score})
 
     wandb.finish()
 

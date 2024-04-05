@@ -19,6 +19,6 @@ def get_model(model_id: str = 'microsoft/deberta-v3-base', tf: bool = False):
 
     model = AutoModelForTokenClassification.from_pretrained(model_id)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device, dtype=torch.bfloat16)
+    model.to(device)
 
     return model, tokenizer
