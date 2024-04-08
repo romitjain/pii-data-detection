@@ -158,24 +158,30 @@ def random_augmentation(token: str, type: str) -> str:
         return None
 
 
-def tokenizer_and_align(example: Dict, tokenizer) -> Dict:
+def tokenizer_and_align(example: Dict, tokenizer, pad_to_multiple_of: int=512) -> Dict:
 
     tokens = [f'{token} ' if ws else token for token, ws in zip(example['tokens'], example['trailing_whitespace'])]
     tokens = tokenizer(
         tokens,
         padding=True,
-        pad_to_multiple_of=2048,
+        pad_to_multiple_of=pad_to_multiple_of,
         is_split_into_words=True
     )
 
     label_ids = []
     word_ids = tokens.word_ids()
+    prev_idx = None
 
     for word_idx in word_ids:
         if word_idx is None:
             label_ids.append(-100)
             continue
+        # if word_idx == prev_idx:
+        #     label_ids.append(-100)
+        #     prev_idx = word_idx
+        #     continue
         label_ids.append(label2id[example['labels'][word_idx]])
+        prev_idx = word_idx
 
     example['aligned_tokens'] = tokens
     example['aligned_labels'] = label_ids
@@ -198,6 +204,7 @@ def chunk_examples(batch: Dict, max_len: int = 512, buffer: int = 64) -> Dict:
     Returns:
         Dataset (1:n)
     """
+
     data_row = {
         'document_id': [],
         'input_ids': [],
@@ -228,17 +235,20 @@ def chunk_examples(batch: Dict, max_len: int = 512, buffer: int = 64) -> Dict:
     return data_row
 
 
-def tokenizer_and_align_infer(example: Dict, tokenizer) -> Dict:
+def tokenizer_and_align_infer(example: Dict, tokenizer, pad_to_multiple_of: int=512) -> Dict:
 
     tokens = [f'{token} ' if ws else token for token, ws in zip(example['tokens'], example['trailing_whitespace'])]
     tokens = tokenizer(
         tokens,
         padding=True,
-        pad_to_multiple_of=512,
+        pad_to_multiple_of=pad_to_multiple_of,
         is_split_into_words=True
     )
 
+    word_ids = tokens.word_ids()
+
     example['aligned_tokens'] = tokens
+    example['word_ids'] = word_ids
 
     return example
 
@@ -260,13 +270,15 @@ def chunk_examples_infer(batch: Dict, max_len: int = 512) -> Dict:
     data_row = {
         'document_id': [],
         'input_ids': [],
-        'attention_mask': []
+        'attention_mask': [],
+        'word_ids': []
     }
 
-    for id, aligned_tokens in zip(batch['document'], batch['aligned_tokens']):
+    for id, aligned_tokens, word_idx in zip(batch['document'], batch['aligned_tokens'], batch['word_ids']):
 
         ii = aligned_tokens['input_ids']
         am = aligned_tokens['attention_mask']
+        wi = word_idx
 
         for s in range(0, len(ii), max_len):
             start_idx = s
@@ -275,5 +287,6 @@ def chunk_examples_infer(batch: Dict, max_len: int = 512) -> Dict:
             data_row['document_id'].append(id)
             data_row['input_ids'].append(torch.tensor(ii[start_idx:end_idx]))
             data_row['attention_mask'].append(torch.tensor(am[start_idx:end_idx]))
+            data_row['word_ids'].append(wi[start_idx: end_idx])
 
     return data_row

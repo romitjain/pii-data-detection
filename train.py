@@ -16,6 +16,7 @@ from model import get_model
 from loguru import logger
 
 num_classes = len(list(label2id.keys()))
+model_dtype = torch.bfloat16
 
 def stack(x, p=0): return pad_sequence([torch.tensor(t) for t in x], True, padding_value=p)
 def stack_wo_pad(x): return torch.tensor(x)
@@ -30,7 +31,7 @@ def load_data(path):
 
     return train, val
 
-def update_model(model, unfreeze_layers=0):
+def update_model(model, unfreeze_layers):
     logger.info('Updating the model')
 
     model.config.num_labels = num_classes
@@ -39,14 +40,15 @@ def update_model(model, unfreeze_layers=0):
 
     classifier_layer = torch.nn.Linear(
         model.classifier.in_features,
-        num_classes
+        num_classes,
+        dtype=model_dtype
     ).to('cuda')
 
     model.classifier = classifier_layer
     model.num_labels = num_classes
 
-    for name, layer in model.named_parameters():
-        layer.requires_grad = False
+    # for name, layer in model.named_parameters():
+    #     layer.requires_grad = False
 
     if unfreeze_layers > 0:
         for layer in model.deberta.encoder.layer[-unfreeze_layers:].parameters():
@@ -123,6 +125,8 @@ if __name__ == '__main__':
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--model_id', type=str, default='dslim/bert-large-NER')
     parser.add_argument('--dataset', type=str, default='./data/processed/dataset_3/')
+    parser.add_argument('--unfreeze', type=int, default=0)
+    parser.add_argument('--run_name', type=str, required=False, default=None)
     args = parser.parse_args()
 
     num_epochs = args.epochs
@@ -133,19 +137,21 @@ if __name__ == '__main__':
 
     wandb.init(
         project="pii-data-detection",
+        name=args.run_name,
         config={
             "learning_rate": args.learning_rate,
             "architecture": args.model_id,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
-            "dataset": args.dataset
+            "dataset": args.dataset,
+            "unfreeze": args.unfreeze
         }
     )
 
     train, val = load_data(path=dataset)
-    model, tokenizer = get_model(model_id=model_id)
+    model, tokenizer = get_model(model_id=model_id, dtype=model_dtype)
 
-    model = update_model(model)
+    model = update_model(model, args.unfreeze)
 
     optimizer = AdamW(model.parameters(), lr=learning_rate)
     scheduler = StepLR(optimizer, step_size=5, gamma=0.1, verbose=True)
@@ -153,7 +159,7 @@ if __name__ == '__main__':
 
     device = 'cuda'
     loss_fn = CrossEntropyLoss(
-        # weight=torch.tensor([1, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]).to('cuda', dtype=torch.bfloat16),
+        weight=torch.tensor([1, 300, 1000, 1000, 1000, 1000, 300, 1000, 300, 1000, 1000, 1000, 1000, 1000, 1000]).to('cuda', dtype=model_dtype),
         # label_smoothing=0.05,
         ignore_index=-100
     )
@@ -162,6 +168,8 @@ if __name__ == '__main__':
     model.train()
 
     for epoch in range(num_epochs):
+        train = train.shuffle()
+
         with tqdm(total=len(train)//batch_size, desc=f'Epoch {epoch+1}/{num_epochs}') as pbar:
             for s in range(0, len(train), batch_size):
                 optimizer.zero_grad()
@@ -186,7 +194,7 @@ if __name__ == '__main__':
                 pbar.set_postfix({'Loss': f'{loss.item():.4f}'})
                 pbar.update(1)
 
-                wandb.log({"loss": loss})
+            wandb.log({"loss": loss})
 
         scheduler.step()
 
@@ -197,10 +205,15 @@ if __name__ == '__main__':
     train_metrics = eval_model(model, train, batch_size)
     val_metrics = eval_model(model, val, batch_size)
 
-    train_score = get_score(train_metrics)
-    val_score = get_score(val_metrics)
+    try:
+        train_score = get_score(train_metrics[1:])
+        val_score = get_score(val_metrics[1:])
 
-    wandb.log({"train_score": train_score, "val_score": val_score})
+        wandb.log({"train_score": train_score, "val_score": val_score})
+
+    except Exception as err:
+        logger.info(f'Error: {err}')
+        pass
 
     wandb.finish()
 
