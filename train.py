@@ -17,6 +17,7 @@ from loguru import logger
 
 num_classes = len(list(label2id.keys()))
 model_dtype = torch.bfloat16
+device = 'cuda:0'
 
 def stack(x, p=0): return pad_sequence([torch.tensor(t) for t in x], True, padding_value=p)
 def stack_wo_pad(x): return torch.tensor(x)
@@ -42,7 +43,7 @@ def update_model(model, unfreeze_layers):
         model.classifier.in_features,
         num_classes,
         dtype=model_dtype
-    ).to('cuda')
+    ).to(device)
 
     model.classifier = classifier_layer
     model.num_labels = num_classes
@@ -149,7 +150,7 @@ if __name__ == '__main__':
     )
 
     train, val = load_data(path=dataset)
-    model, tokenizer = get_model(model_id=model_id, dtype=model_dtype)
+    model, tokenizer = get_model(model_id=model_id, dtype=model_dtype, device=device)
 
     model = update_model(model, args.unfreeze)
 
@@ -157,9 +158,8 @@ if __name__ == '__main__':
     scheduler = StepLR(optimizer, step_size=5, gamma=0.1, verbose=True)
     total_steps = len(train) * num_epochs
 
-    device = 'cuda'
     loss_fn = CrossEntropyLoss(
-        weight=torch.tensor([1, 300, 1000, 1000, 1000, 1000, 300, 1000, 300, 1000, 1000, 1000, 1000, 1000, 1000]).to('cuda', dtype=model_dtype),
+        weight=torch.tensor([1, 300, 1000, 1000, 1000, 1000, 300, 1000, 300, 1000, 1000, 1000, 1000, 1000, 1000]).to(device, dtype=model_dtype),
         # label_smoothing=0.05,
         ignore_index=-100
     )
