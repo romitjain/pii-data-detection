@@ -27,7 +27,7 @@ def model_memory_usage(model, dtype):
     return total_memory_usage_gb
 
 
-def get_model(model_id: str = 'microsoft/deberta-v3-base', tf: bool = False, dtype: torch.dtype = None):
+def get_model(model_id: str = 'microsoft/deberta-v3-base', tf: bool = False, dtype: torch.dtype = None, device: str = 'cuda:0'):
     """
     Given a `model_id` returns the model and the tokenizer
 
@@ -44,7 +44,7 @@ def get_model(model_id: str = 'microsoft/deberta-v3-base', tf: bool = False, dty
         return model, tokenizer
 
     model = AutoModelForTokenClassification.from_pretrained(model_id)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(device)
     model.to(device)
 
     if dtype:
